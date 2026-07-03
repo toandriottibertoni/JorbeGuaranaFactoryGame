@@ -70,7 +70,11 @@ const RARITY = {
   common: { weight: 6.0, costMul: 1.0,  color: '#8ACC8A', label: 'Comum'  },
   rare:   { weight: 2.2, costMul: 1.5,  color: '#5AA8FF', label: 'Raro'   },
   epic:   { weight: 0.7, costMul: 2.4,  color: '#FFB030', label: 'Épico'  },
+  factory:{ weight: 0.0, costMul: 1.0,  color: '#7BE36A', label: 'Fábrica'},
 };
+
+// Produção passiva: moedas por segundo conforme o nível da fábrica
+function prodRate(lvl) { return lvl * 0.35; }
 
 // ── Pool de upgrades (roguelike) — só 3 aparecem por vez ──────────────────────
 const UPGRADES = [
@@ -99,10 +103,22 @@ const UPGRADES = [
     desc:h=>`tiros atravessam +1 garrafa`,
     apply:h=>{ h.up.pierce += 1; } },
 ];
-// Custo progressivo agressivo: ~1.8x a cada nível já comprado, ajustado por raridade
+// Opção FIXA da fábrica — aparece sempre na loja
+const PRODUCTION_UP = {
+  id:'production', icon:'🏭', name:'Produção de Guaraná', rarity:'factory', baseCost:30,
+  desc:h=>{
+    const lv = h.up.levels.production || 0;
+    return lv === 0
+      ? `Começa a produzir ${prodRate(1).toFixed(2)} 🪙/seg automático`
+      : `${prodRate(lv).toFixed(2)} → ${prodRate(lv+1).toFixed(2)} 🪙/seg (nível ${lv}→${lv+1})`;
+  },
+  apply:h=>{ h.up.production += 1; }
+};
+// Custo progressivo agressivo: ~1.8x a cada nível já comprado (produção sobe mais rápido: 2.1x)
 function upgradeCost(u) {
   const lv = (hero.up.levels[u.id] || 0);
-  return Math.round(u.baseCost * RARITY[u.rarity].costMul * Math.pow(1.8, lv));
+  const mul = u.id === 'production' ? 2.1 : 1.8;
+  return Math.round(u.baseCost * RARITY[u.rarity].costMul * Math.pow(mul, lv));
 }
 
 // ── BG animated state ─────────────────────────────────────────────────────────
@@ -129,8 +145,30 @@ let rainDrops = [];
 let heli = null; // {x,y,dir,blade,spot,hitFlash,timer}
 let heliTimer = 18000;
 
+// Cristo Redentor (Corcovado, bem ao fundo) — animação de susto/indignação
+let cristoTimer = 9000, cristoScared = 0;
+
+// Baile funk na favela (noite/temporal) — luzes e feixes no céu
+let baile = null;          // {x, y, life, beat}
+let baileTimer = 16000;
+const BAILE_COLORS = ['#FF2AA8','#22E0FF','#8A3BFF','#39FF6A','#FFE23A'];
+
 // Espuma do super poder (jato de refrigerante)
 let sprayFoam = [];
+
+// ── Áudio: mute + vinheta do Flamengo ─────────────────────────────────────────
+let musicMuted = false, sfxMuted = false;
+const vinheta = new Audio('vinheta-flamengo.mp3');
+vinheta.volume = 0.75;
+function playVinheta() {
+  if (sfxMuted) return;
+  try { vinheta.currentTime = 0; vinheta.play(); } catch (e) {}
+}
+
+// ── Torcida do Flamengo (poder pago que invoca fãs) ───────────────────────────
+let torcidaUses = 0;
+let fans = [];   // {x,y,vx,frame,alive}
+function torcidaCost() { return Math.round(40 * Math.pow(1.55, torcidaUses)); }
 
 // Favela buildings — barracos estilo Rio, irregulares, laje/zinco
 // [x, baseY, w, h, tipo(0=tijolo,1=concreto,2=zinco), tank, dish]
@@ -154,6 +192,25 @@ const FAVELA = (() => {
     [364,394,18,30,0,1,0],[384,390,24,40,1,0,0],[410,388,18,32,2,0,0],[430,386,20,36,0,0,1],
     [452,385,22,38,1,0,0],[476,384,18,30,2,1,0],[496,383,20,34,0,0,0],[518,383,16,28,1,0,1],
     [536,382,22,38,2,0,0],[560,382,18,32,0,0,0],[580,381,20,36,1,1,0],[602,381,24,42,2,0,0],
+    // Topo — continuação à direita (mais barracos no alto)
+    [630,382,20,36,0,0,1],[654,383,18,32,2,1,0],[676,384,22,40,1,0,0],[702,385,18,30,0,0,0],
+    [724,386,20,36,2,0,1],[748,387,16,28,1,1,0],[768,388,22,40,0,0,0],[794,389,18,32,2,0,0],
+    [816,390,20,36,1,0,1],[840,391,18,30,0,1,0],[862,392,22,38,2,0,0],[888,393,20,34,1,0,0],
+    [912,394,18,32,0,0,1],[934,394,22,40,2,1,0],[960,395,18,30,1,0,0],[982,396,20,36,0,0,0],
+    [1006,397,22,42,2,0,1],[1034,398,18,32,1,1,0],[1056,399,20,36,0,0,0],[1080,400,22,40,2,0,0],
+    [1108,401,18,30,1,0,1],[1130,401,20,36,0,1,0],[1154,402,22,40,2,0,0],[1180,403,18,32,1,0,0],
+    [1204,404,20,36,0,0,1],[1230,405,22,40,2,1,0],[1256,406,18,32,1,0,0],
+    // Adensamento entre-camadas (preenche buracos, barracos colados)
+    [278,458,24,44,1,1,0],[338,450,26,50,2,0,0],[398,442,24,46,0,1,0],[470,436,26,52,1,0,0],
+    [548,430,24,48,2,1,0],[624,426,26,54,0,0,0],[706,424,24,50,1,1,0],[788,424,26,56,2,0,0],
+    [872,425,24,48,0,1,0],[956,426,26,52,1,0,0],[1042,427,24,50,2,1,0],[1128,428,26,54,0,0,0],
+    [1214,430,24,48,1,1,0],
+    // Fileira da frente (base do morro, mais colorida e baixa)
+    [270,486,26,40,0,0,0],[318,482,22,34,2,1,0],[360,480,28,46,1,0,0],[416,478,24,40,0,1,0],
+    [462,477,26,44,2,0,0],[520,476,22,36,1,1,0],[566,475,28,48,0,0,0],[624,475,24,40,2,1,0],
+    [676,475,26,44,1,0,0],[736,475,22,36,0,1,0],[786,475,28,46,2,0,0],[848,476,24,40,1,1,0],
+    [900,476,26,44,0,0,0],[960,477,22,36,2,1,0],[1010,477,28,46,1,0,0],[1072,478,24,40,0,1,0],
+    [1124,478,26,44,2,1,0],[1184,479,22,38,1,0,0],[1232,480,28,46,0,1,0],
   ];
   const BRICK  = ['#8B5A3A','#7A4A2A','#9A6545','#6B3A20'];
   const CONC   = ['#888078','#7A7268','#969088','#6A6460'];
@@ -191,10 +248,12 @@ document.addEventListener('keydown', e => {
       hero.powerTimer = 1000;
       sfxShake();
     }
+    if (e.code === 'KeyF') callTorcida();
   } else if (state === 'shop') {
     if (e.code === 'Digit1' || e.code === 'Numpad1') buyUpgrade(0);
     if (e.code === 'Digit2' || e.code === 'Numpad2') buyUpgrade(1);
     if (e.code === 'Digit3' || e.code === 'Numpad3') buyUpgrade(2);
+    if (e.code === 'Digit4' || e.code === 'Numpad4') buyUpgrade(3);
     if (e.code === 'Space' || e.code === 'Escape' || e.code === 'KeyS') closeShop(); // pular
   } else if (e.code === 'Space') initGame();
 });
@@ -212,14 +271,26 @@ canvas.addEventListener('mousemove', ev => {
     if (mx >= c.x && mx <= c.x+c.w && my >= c.y && my <= c.y+c.h) shopHover = i;
   }
 });
+// Botões de mute (canto superior direito) e torcida (rodapé)
+function musicBtnRect() { return { x: W - 78, y: 10, w: 30, h: 30 }; }
+function sfxBtnRect()   { return { x: W - 42, y: 10, w: 30, h: 30 }; }
+function torcidaBtnRect(){ return { x: 300, y: H - 46, w: 172, h: 30 }; }
+function inRect(mx, my, r) { return mx >= r.x && mx <= r.x+r.w && my >= r.y && my <= r.y+r.h; }
+
 canvas.addEventListener('click', ev => {
-  if (state !== 'shop') return;
   const r = canvas.getBoundingClientRect();
   const mx = (ev.clientX - r.left) * (W / r.width);
   const my = (ev.clientY - r.top) * (H / r.height);
-  for (let i = 0; i < shopOptions.length; i++) {
-    const c = shopCardRect(i);
-    if (mx >= c.x && mx <= c.x+c.w && my >= c.y && my <= c.y+c.h) { buyUpgrade(i); return; }
+  // Mute — funciona em qualquer tela
+  if (inRect(mx, my, musicBtnRect())) { toggleMusic(); return; }
+  if (inRect(mx, my, sfxBtnRect()))   { toggleSfx();   return; }
+  if (state === 'shop') {
+    for (let i = 0; i < shopOptions.length; i++) {
+      const c = shopCardRect(i);
+      if (inRect(mx, my, c)) { buyUpgrade(i); return; }
+    }
+  } else if (state === 'playing') {
+    if (inRect(mx, my, torcidaBtnRect())) { callTorcida(); return; }
   }
 });
 
@@ -311,11 +382,14 @@ function initGame() {
     up: {                 // upgrades roguelike
       bulletDmg: 0, fireRateMul: 1, moveMul: 1,
       specialDmg: 0, chargeMul: 1, coinMul: 1, pierce: 0,
+      production: 0,      // nível da produção de guaraná (renda passiva)
       levels: {}          // quantas vezes cada upgrade foi comprado
     },
+    prodAccum: 0,         // acumulador de moedas da produção
   };
   sprayFoam = [];
   coins = 0; shopOptions = []; shopHover = -1;
+  fans = []; torcidaUses = 0;
   enemies = []; bullets = []; dmgTexts = []; deadParticles = [];
   score = 0; wave = 0;
   factoryLives = 5; factoryFlash = 0;
@@ -474,12 +548,49 @@ function updateBG(dt) {
     if (Math.random() < 0.004) { heli.hitFlash = 1; sfxHit && sfxHit(); }
     if (heli.timer <= 0 || heli.x < FACTORY_X - 120 || heli.x > W + 120) heli = null;
   }
+
+  // ── Cristo Redentor: de vez em quando fica assustado/indignado e volta ──
+  cristoTimer -= ms;
+  if (cristoTimer <= 0 && cristoScared <= 0) {
+    cristoScared = 1500;
+    cristoTimer = 11000 + Math.random() * 16000;
+  }
+  cristoScared = Math.max(0, cristoScared - ms);
+
+  // ── Baile funk (só à noite / temporal) ──
+  if (bgPhase === 'night' || bgPhase === 'storm') {
+    if (!baile) {
+      baileTimer -= ms;
+      if (baileTimer <= 0) {
+        const life = 10000 + Math.random() * 9000;
+        baile = {
+          x: FACTORY_X + 160 + Math.random() * (W - FACTORY_X - 340),
+          y: 372 + Math.random() * 18,
+          life, maxLife: life, beat: 0
+        };
+        baileTimer = 26000 + Math.random() * 34000;
+      }
+    }
+  } else {
+    baile = null;
+  }
+  if (baile) {
+    baile.beat += dt;
+    baile.life -= ms;
+    if (baile.life <= 0) baile = null;
+  }
 }
 
 // ── Update ────────────────────────────────────────────────────────────────────
 function update(dt) {
   updateBG(dt);
   if (state !== 'playing') return;
+
+  // Produção passiva de guaraná → moedas ao longo do tempo
+  if (hero.up.production > 0) {
+    hero.prodAccum += dt * prodRate(hero.up.production);
+    if (hero.prodAccum >= 1) { const g = Math.floor(hero.prodAccum); coins += g; hero.prodAccum -= g; }
+  }
 
   // Hero
   const prevY = hero.y;
@@ -669,6 +780,30 @@ function update(dt) {
   }
   deadParticles = deadParticles.filter(p => p.life > 0);
 
+  // Torcida do Flamengo: fãs correm e dão dano ao colidir com garrafas
+  for (const f of fans) {
+    f.x += f.vx * dt;
+    f.frame += dt * 14;
+    for (const e of enemies) {
+      const s = e.scale, aw = VW * s, ax = e.x + VW/2 - aw/2;
+      if (f.x >= ax && f.x <= ax + aw) {
+        const dmg = 55;
+        e.hp -= dmg; e.hitFlash = 150; e.hitSquash = 0.9;
+        spawnDmg(ax + aw/2, GROUND_Y - VH*s*0.5, dmg, true);
+        if (e.hp <= 0) { killReward(e); sfxBreak(); spawnDeath(e); }
+        f.alive = false;
+        // poeira do impacto
+        for (let k = 0; k < 4; k++) deadParticles.push({
+          type:'star', x:f.x, y:f.y, vx:(Math.random()-0.5)*120, vy:-Math.random()*140,
+          r:2+Math.random()*2, rot:0, rotV:0, life:400, col:'#C81414'
+        });
+        break;
+      }
+    }
+    if (f.x > W + 20) f.alive = false;
+  }
+  fans = fans.filter(f => f.alive);
+
   // Enemy hit-squash decay
   for (const e of enemies) {
     e.hitSquash = Math.max(0, (e.hitSquash || 0) - dt * 7);
@@ -686,7 +821,15 @@ function killReward(e) {
   score += ETYPES[e.type].score;
   const c = Math.round((COIN_VALUE[e.type] || 5) * hero.up.coinMul);
   coins += c;
-  dmgTexts.push({ x: e.x + VW*e.scale/2, y: GROUND_Y - VH*e.scale*0.5, dmg: c, life: 1100, coin: true });
+  const cx = e.x + VW*e.scale/2, cy = GROUND_Y - VH*e.scale*0.5;
+  dmgTexts.push({ x: cx, y: cy, dmg: c, life: 1100, coin: true });
+  // Mega Cola: 45% de chance de soltar um baú de moedas (10–30) p/ ajudar na progressão
+  if (e.type === 'big' && Math.random() < 0.45) {
+    const bonus = 10 + Math.floor(Math.random() * 21); // 10 a 30
+    coins += bonus;
+    dmgTexts.push({ x: cx, y: cy - 34, dmg: bonus, life: 1500, jackpot: true });
+    sfxBuy();
+  }
 }
 
 // ── Loja roguelike ────────────────────────────────────────────────────────────
@@ -703,15 +846,19 @@ function openShop() {
     }
     shopOptions.push(pool.splice(idx, 1)[0]);
   }
+  shopOptions.push(PRODUCTION_UP); // opção fixa da fábrica (4ª carta)
   shopHover = -1;
   state = 'shop';
   sfxShop();
 }
 function shopCardRect(i) {
-  const cw = 280, ch = 260, gap = 40;
-  const totalW = cw*3 + gap*2;
+  const n = shopOptions.length;
+  const cw  = n >= 4 ? 230 : 280;
+  const gap = n >= 4 ? 26  : 40;
+  const ch  = 260;
+  const totalW = cw*n + gap*(n-1);
   const x = (W - totalW)/2 + i*(cw+gap);
-  const y = H/2 - ch/2 + 10;
+  const y = H/2 - ch/2 + 20;
   return { x, y, w: cw, h: ch };
 }
 function buyUpgrade(i) {
@@ -728,6 +875,27 @@ function buyUpgrade(i) {
 function closeShop() {
   shopOptions = [];
   state = 'playing';
+}
+
+// ── Chamar Torcida do Flamengo (poder pago, custo crescente) ──────────────────
+function callTorcida() {
+  if (state !== 'playing') return;
+  const cost = torcidaCost();
+  if (coins < cost) { sfxAlarm(); return; }
+  coins -= cost;
+  torcidaUses++;
+  playVinheta();
+  // Vários fãs saem da fábrica correndo pela direita
+  const n = 16;
+  for (let i = 0; i < n; i++) {
+    fans.push({
+      x: FACTORY_X - 8 - Math.random() * 26,
+      y: GROUND_Y - 5 - Math.random() * 12,
+      vx: 165 + Math.random() * 130,
+      frame: Math.random() * 10,
+      alive: true
+    });
+  }
 }
 
 // ── Death explosion: tampa, líquido, cacos de vidro ───────────────────────────
@@ -878,6 +1046,168 @@ function bricks(x,y,w,h) {
   ctx.restore();
 }
 
+// ── Baile funk: feixes de luz varrendo o céu + laje piscando ──────────────────
+function drawBaile() {
+  if (!baile) return;
+  const now = Date.now();
+  // fade in/out nas pontas da duração
+  const elapsed = baile.maxLife - baile.life;
+  const fade = Math.min(1, baile.life / 1400, elapsed / 1400);
+  // pulso no ritmo (~130 bpm)
+  const beat = 0.55 + 0.45 * Math.abs(Math.sin(baile.beat * 7.5));
+  const bx = baile.x, by = baile.y;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+
+  // Brilho no céu acima do baile
+  const glowR = 150 * (0.85 + beat * 0.25);
+  const gg = ctx.createRadialGradient(bx, by - 70, 8, bx, by - 70, glowR);
+  const gcol = BAILE_COLORS[Math.floor(now / 260) % BAILE_COLORS.length];
+  gg.addColorStop(0, hexA(gcol, 0.42 * beat * fade));
+  gg.addColorStop(1, hexA(gcol, 0));
+  ctx.fillStyle = gg;
+  ctx.fillRect(bx - glowR, by - 70 - glowR, glowR * 2, glowR * 2);
+
+  // Feixes de laser varrendo pra cima (leque que oscila)
+  const N = 5, len = 300;
+  for (let i = 0; i < N; i++) {
+    const sweep = Math.sin(now / 620 + i * 1.25) * 0.42;
+    const ang = -Math.PI / 2 + sweep + (i - (N - 1) / 2) * 0.17;
+    const spread = 0.035;
+    const col = BAILE_COLORS[(i + Math.floor(now / 400)) % BAILE_COLORS.length];
+    const ex = bx + Math.cos(ang) * len, ey = by + Math.sin(ang) * len;
+    const lg = ctx.createLinearGradient(bx, by, ex, ey);
+    lg.addColorStop(0, hexA(col, 0.55 * beat * fade));
+    lg.addColorStop(1, hexA(col, 0));
+    ctx.fillStyle = lg;
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx + Math.cos(ang - spread) * len, by + Math.sin(ang - spread) * len);
+    ctx.lineTo(bx + Math.cos(ang + spread) * len, by + Math.sin(ang + spread) * len);
+    ctx.closePath(); ctx.fill();
+  }
+
+  // Luzes estroboscópicas piscando na laje
+  for (let i = 0; i < 7; i++) {
+    const on = Math.sin(now / 90 + i * 2.1) > 0.2;
+    if (!on) continue;
+    const col = BAILE_COLORS[(i + Math.floor(now / 130)) % BAILE_COLORS.length];
+    const lx = bx - 30 + i * 10, ly = by + (i % 2) * 4;
+    ctx.fillStyle = hexA(col, 0.9 * fade);
+    ctx.beginPath(); ctx.arc(lx, ly, 2.6, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+// helper: cor hex + alpha → rgba()
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+// ── Corcovado + Cristo Redentor rubro-negro ───────────────────────────────────
+function drawCorcovado() {
+  const day = bgPhase === 'day';
+  const cx = FACTORY_X + 470;   // centro do morro do Corcovado
+  const peakY = 150;            // topo do morro (base da estátua)
+
+  // Morro do Corcovado (silhueta pontuda, bem hazy ao fundo)
+  ctx.fillStyle = day ? '#4E5442' : '#1B2236';
+  ctx.beginPath();
+  ctx.moveTo(cx - 110, 470);
+  ctx.bezierCurveTo(cx - 70, 360, cx - 40, 250, cx - 14, peakY + 8);
+  ctx.quadraticCurveTo(cx, peakY - 6, cx + 16, peakY + 10);
+  ctx.bezierCurveTo(cx + 42, 250, cx + 78, 360, cx + 120, 470);
+  ctx.closePath(); ctx.fill();
+
+  // ── Estátua do Cristo (sobre o pico) ──
+  const scared = cristoScared > 0;
+  // pequeno tremor quando assustado
+  const shake = scared ? Math.sin(Date.now() / 45) * 1.2 : 0;
+  const baseY = peakY - 2;
+
+  ctx.save();
+  ctx.translate(cx + shake, 0);
+
+  // Pedestal
+  ctx.fillStyle = day ? '#6A6250' : '#2A3348';
+  ctx.fillRect(-7, baseY - 6, 14, 8);
+
+  // Manto/corpo (trapézio)
+  const bodyTop = baseY - 6 - 34; // altura do corpo ~34
+  ctx.fillStyle = day ? '#E8E4D8' : '#8A93A8';  // pedra clara
+  ctx.beginPath();
+  ctx.moveTo(-7, baseY - 6);
+  ctx.lineTo(-5, bodyTop);
+  ctx.lineTo(5, bodyTop);
+  ctx.lineTo(7, baseY - 6);
+  ctx.closePath(); ctx.fill();
+
+  // Camisa do Flamengo (faixas rubro-negras horizontais no torso)
+  const shirtTop = bodyTop + 4, shirtBot = bodyTop + 22;
+  ctx.save();
+  ctx.beginPath();  // recorta no formato do torso
+  ctx.moveTo(-6, shirtBot); ctx.lineTo(-5, shirtTop); ctx.lineTo(5, shirtTop); ctx.lineTo(6, shirtBot);
+  ctx.closePath(); ctx.clip();
+  const hoop = 3;
+  for (let y = shirtTop, i = 0; y < shirtBot; y += hoop, i++) {
+    ctx.fillStyle = (i % 2 === 0) ? '#C81414' : '#111111'; // vermelho / preto
+    ctx.fillRect(-7, y, 14, hoop);
+  }
+  ctx.restore();
+
+  // Braços abertos (a cruz icônica) — na altura dos ombros
+  const armY = shirtTop + 2;
+  ctx.strokeStyle = day ? '#E0DCD0' : '#828BA0';
+  ctx.lineWidth = 4; ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-22, armY + 3); ctx.lineTo(22, armY + 3);
+  ctx.stroke();
+  ctx.lineWidth = 1;
+
+  // Cabeça
+  const headY = bodyTop - 5;
+  ctx.fillStyle = day ? '#E8E4D8' : '#8A93A8';
+  ctx.beginPath(); ctx.arc(0, headY, 5, 0, Math.PI * 2); ctx.fill();
+
+  // Rosto — normal (sereno) ou assustado/indignado
+  ctx.fillStyle = day ? '#3A3A38' : '#20263A';
+  if (scared) {
+    // olhos arregalados
+    ctx.beginPath(); ctx.arc(-2, headY - 1, 1.6, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(2, headY - 1, 1.6, 0, Math.PI * 2); ctx.fill();
+    // sobrancelhas indignadas (\ /)
+    ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 0.8;
+    ctx.beginPath(); ctx.moveTo(-4, headY - 3.5); ctx.lineTo(-1, headY - 2.4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(4, headY - 3.5); ctx.lineTo(1, headY - 2.4); ctx.stroke();
+    // boca aberta (susto)
+    ctx.beginPath(); ctx.arc(0, headY + 2.4, 1.6, 0, Math.PI * 2); ctx.fill();
+    // balão de fala com "!?"
+    ctx.save();
+    const bob = Math.sin(Date.now() / 120) * 2;
+    const bx = 34, by = headY - 20 + bob;
+    // bolha branca
+    ctx.fillStyle = '#FFFFFF'; ctx.strokeStyle = INK; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.ellipse(bx, by, 13, 10, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    // rabinho da bolha apontando pra cabeça
+    ctx.beginPath();
+    ctx.moveTo(bx - 8, by + 6); ctx.lineTo(bx - 16, by + 14); ctx.lineTo(bx - 4, by + 8);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    // texto
+    ctx.font = 'bold 15px Georgia'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#C81414';
+    ctx.fillText('!?', bx, by + 1);
+    ctx.textBaseline = 'alphabetic';
+    ctx.restore();
+  } else {
+    // olhos calmos (traços)
+    ctx.fillRect(-2.5, headY - 1, 1.4, 1);
+    ctx.fillRect(1.1, headY - 1, 1.4, 1);
+  }
+
+  ctx.restore();
+}
+
 // ── Background ────────────────────────────────────────────────────────────────
 function drawBG() {
   const t = Date.now();
@@ -946,15 +1276,46 @@ function drawBG() {
     ctx.restore();
   }
 
-  // ── Morro (hill) silhueta ──
-  ctx.fillStyle = '#2A1F12';
+  // ── Corcovado + Cristo Redentor (bem ao fundo, atrás dos morros) ──
+  drawCorcovado();
+
+  // ── Morros ao fundo (vários picos, com camadas para profundidade) ──
+  // Camada distante (mais clara/dessaturada)
+  ctx.fillStyle = bgPhase==='day' ? '#3A4030' : '#161C22';
   ctx.beginPath();
   ctx.moveTo(FACTORY_X, GROUND_Y);
-  ctx.lineTo(FACTORY_X, 480);
-  ctx.bezierCurveTo(FACTORY_X+40, 460, FACTORY_X+80, 430, FACTORY_X+140, 400);
-  ctx.bezierCurveTo(FACTORY_X+200, 370, FACTORY_X+250, 355, FACTORY_X+340, 345);
-  ctx.bezierCurveTo(FACTORY_X+450, 338, FACTORY_X+600, 342, FACTORY_X+800, 352);
-  ctx.bezierCurveTo(FACTORY_X+950, 360, W-100, 370, W, 378);
+  ctx.lineTo(FACTORY_X, 400);
+  ctx.bezierCurveTo(FACTORY_X+90, 330, FACTORY_X+160, 320, FACTORY_X+230, 355);
+  ctx.bezierCurveTo(FACTORY_X+300, 390, FACTORY_X+360, 300, FACTORY_X+450, 300);
+  ctx.bezierCurveTo(FACTORY_X+540, 300, FACTORY_X+600, 370, FACTORY_X+690, 345);
+  ctx.bezierCurveTo(FACTORY_X+780, 320, W-140, 300, W, 340);
+  ctx.lineTo(W, GROUND_Y); ctx.closePath(); ctx.fill();
+
+  // Camada intermediária (Morro do Corcovado-style, com pico pontudo)
+  ctx.fillStyle = bgPhase==='day' ? '#2E3324' : '#101820';
+  ctx.beginPath();
+  ctx.moveTo(FACTORY_X, GROUND_Y);
+  ctx.lineTo(FACTORY_X, 440);
+  ctx.bezierCurveTo(FACTORY_X+120, 400, FACTORY_X+200, 415, FACTORY_X+300, 385);
+  ctx.lineTo(FACTORY_X+360, 300);   // pico pontudo (estilo Dois Irmãos)
+  ctx.lineTo(FACTORY_X+420, 385);
+  ctx.bezierCurveTo(FACTORY_X+520, 405, FACTORY_X+640, 390, FACTORY_X+760, 400);
+  ctx.lineTo(FACTORY_X+820, 330);   // segundo pico
+  ctx.lineTo(FACTORY_X+880, 400);
+  ctx.bezierCurveTo(W-120, 410, W-60, 395, W, 405);
+  ctx.lineTo(W, GROUND_Y); ctx.closePath(); ctx.fill();
+
+  // Camada frontal (onde ficam os barracos) — ondulada com vários morros
+  ctx.fillStyle = bgPhase==='day' ? '#2A1F12' : '#0C1016';
+  ctx.beginPath();
+  ctx.moveTo(FACTORY_X, GROUND_Y);
+  ctx.lineTo(FACTORY_X, 482);
+  ctx.bezierCurveTo(FACTORY_X+60, 452, FACTORY_X+110, 430, FACTORY_X+180, 412);
+  ctx.bezierCurveTo(FACTORY_X+240, 396, FACTORY_X+290, 386, FACTORY_X+360, 388);
+  ctx.bezierCurveTo(FACTORY_X+430, 390, FACTORY_X+470, 402, FACTORY_X+540, 398);
+  ctx.bezierCurveTo(FACTORY_X+620, 393, FACTORY_X+690, 380, FACTORY_X+780, 386);
+  ctx.bezierCurveTo(FACTORY_X+880, 392, FACTORY_X+960, 402, W-120, 398);
+  ctx.bezierCurveTo(W-60, 396, W-20, 402, W, 404);
   ctx.lineTo(W, GROUND_Y); ctx.closePath(); ctx.fill();
 
   // ── Barracos da favela ──
@@ -1039,11 +1400,19 @@ function drawBG() {
       }
     }
 
-    // Caixa d'água (só em barracos maiores)
-    if (b.tank && b.h >= 45) {
-      const tx = b.x + b.w * 0.5 - 6;
-      ctx.fillStyle = '#5A4A38'; ctx.strokeStyle = '#2A1A0A'; ctx.lineWidth = 1;
-      ctx.fillRect(tx, topY - 14, 12, 13); ctx.strokeRect(tx, topY - 14, 12, 13);
+    // Caixa d'água azul (Tigre) — só em barracos maiores
+    if (b.tank && b.h >= 40) {
+      const tw = 13, th = 14, tx = b.x + b.w * 0.5 - tw/2, ty2 = topY - th - 1;
+      // corpo azul
+      ctx.fillStyle = bgPhase==='day' ? '#3B7BC4' : '#274E7A';
+      ctx.strokeStyle = '#14243A'; ctx.lineWidth = 1;
+      ctx.fillRect(tx, ty2, tw, th); ctx.strokeRect(tx, ty2, tw, th);
+      // faixa de brilho
+      ctx.fillStyle = bgPhase==='day' ? '#6AA6E0' : '#3A6699';
+      ctx.fillRect(tx + 1, ty2 + 2, 3, th - 4);
+      // tampa
+      ctx.fillStyle = '#2A5488';
+      ctx.fillRect(tx - 1, ty2 - 2, tw + 2, 3); ctx.strokeRect(tx - 1, ty2 - 2, tw + 2, 3);
     }
 
     // Antena de TV
@@ -1070,6 +1439,9 @@ function drawBG() {
     ctx.stroke();
   }
   ctx.restore();
+
+  // ── Baile funk (luzes + feixes no céu) ──
+  drawBaile();
 
   // ── Tiros rastejantes ──
   tracers.forEach(tr => {
@@ -1282,6 +1654,30 @@ function drawSprayFoam() {
     ctx.globalAlpha = a * 0.5;
     ctx.fillStyle = '#FFFFFF';
     ctx.beginPath(); ctx.arc(f.x - f.r * 0.3, f.y - f.r * 0.3, f.r * 0.3, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ── Torcida do Flamengo (fãs correndo) ────────────────────────────────────────
+function drawFans() {
+  for (const f of fans) {
+    const run = Math.sin(f.frame) * 3;
+    ctx.save();
+    ctx.translate(f.x, f.y);
+    // pernas (correndo)
+    ctx.strokeStyle = '#1A1A1A'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(0, -2); ctx.lineTo(-3 + run, 5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, -2); ctx.lineTo(3 - run, 5); ctx.stroke();
+    // camisa rubro-negra (faixas)
+    for (let i = 0; i < 3; i++) { ctx.fillStyle = i % 2 ? '#111111' : '#C81414'; ctx.fillRect(-4, -11 + i*3, 8, 3); }
+    ctx.strokeStyle = '#111'; ctx.lineWidth = 0.6; ctx.strokeRect(-4, -11, 8, 9);
+    // braços erguidos (comemorando)
+    ctx.strokeStyle = '#C81414'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-4, -9); ctx.lineTo(-7, -12 - run); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(4, -9); ctx.lineTo(7, -12 + run); ctx.stroke();
+    // cabeça
+    ctx.fillStyle = '#E0A870'; ctx.strokeStyle = '#7A4A20'; ctx.lineWidth = 0.6;
+    ctx.beginPath(); ctx.arc(0, -15, 3.4, 0, Math.PI*2); ctx.fill(); ctx.stroke();
     ctx.restore();
   }
 }
@@ -1649,7 +2045,10 @@ function drawDmgTexts() {
     const a=Math.min(1,t.life/900);
     ctx.save(); ctx.globalAlpha=a; ctx.textAlign='center';
     ctx.strokeStyle=INK; ctx.lineWidth=3;
-    if (t.block) {
+    if (t.jackpot) {
+      ctx.font='bold 22px Georgia'; ctx.fillStyle='#FFE24A';
+      ctx.strokeText('💰 +'+t.dmg+' moedas!',t.x,t.y); ctx.fillText('💰 +'+t.dmg+' moedas!',t.x,t.y);
+    } else if (t.block) {
       ctx.font='bold 13px Georgia'; ctx.fillStyle='#9AB0C0';
       ctx.strokeText('CLINC!',t.x,t.y); ctx.fillText('CLINC!',t.x,t.y);
     } else if (t.coin) {
@@ -1668,6 +2067,47 @@ function drawDmgTexts() {
   }
 }
 
+// ── Painel de status (atributos atuais do Jorbe) ──────────────────────────────
+function drawStatsPanel() {
+  const x = 8, y = 84, w = 196, lh = 19;
+  const dmg  = 8 + hero.up.bulletDmg;
+  const crit = 14 + dmg;
+  const rate = (hero.up.fireRateMul * 1000 / 360).toFixed(1);
+  const vel  = Math.round(hero.up.moveMul * 100);
+  const esp  = 18 + hero.up.specialDmg;
+  const prod = prodRate(hero.up.production).toFixed(2);
+  const coinB = Math.round((hero.up.coinMul - 1) * 100);
+  const lines = [
+    ['💥 Dano tiro',   dmg + ' (crít ' + crit + ')', '#FFCFA0'],
+    ['⚡ Cadência',    rate + '/s',                   '#FFE27A'],
+    ['👟 Velocidade',  vel + '%',                     '#B0D8FF'],
+    ['🎯 Perfuração',  '+' + hero.up.pierce,          '#C6A6FF'],
+    ['🌊 Especial',    '' + esp,                      '#8AD8FF'],
+    ['🏭 Produção',    prod + ' 🪙/s',                '#7BE36A'],
+    ['🪙 Bônus moeda', '+' + coinB + '%',             '#FFCC33'],
+  ];
+  const h = 16 + lines.length * lh;
+  // fundo translúcido
+  ctx.fillStyle = 'rgba(10,7,3,0.78)';
+  rr(x, y, w, h, 8); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,210,120,0.5)'; ctx.lineWidth = 1.5;
+  rr(x, y, w, h, 8); ctx.stroke();
+  // título
+  ctx.textAlign = 'center'; ctx.font = 'bold 12px Georgia'; ctx.fillStyle = '#FFD080';
+  ctx.strokeStyle = INK; ctx.lineWidth = 2;
+  ctx.strokeText('ATRIBUTOS', x + w/2, y + 14); ctx.fillText('ATRIBUTOS', x + w/2, y + 14);
+  // linhas
+  ctx.font = 'bold 12px Georgia'; ctx.lineWidth = 2.5;
+  lines.forEach((ln, i) => {
+    const ly = y + 32 + i * lh;
+    ctx.textAlign = 'left'; ctx.fillStyle = '#E0D0B0';
+    ctx.strokeText(ln[0], x + 8, ly); ctx.fillText(ln[0], x + 8, ly);
+    ctx.textAlign = 'right'; ctx.fillStyle = ln[2];
+    ctx.strokeText(ln[1], x + w - 8, ly); ctx.fillText(ln[1], x + w - 8, ly);
+  });
+  ctx.textAlign = 'left';
+}
+
 // ── HUD ───────────────────────────────────────────────────────────────────────
 function drawHUD() {
   if (state !== 'playing') return;
@@ -1680,6 +2120,15 @@ function drawHUD() {
   // Moedas
   ctx.font='bold 16px Georgia'; ctx.fillStyle='#FFCC33';
   ctx.strokeText('🪙 '+coins,200,28); ctx.fillText('🪙 '+coins,200,28);
+  // Renda passiva da produção de guaraná
+  if (hero.up.production > 0) {
+    ctx.font='bold 12px Georgia'; ctx.fillStyle='#7BE36A';
+    const txt='🏭 +'+prodRate(hero.up.production).toFixed(2)+'/s';
+    ctx.strokeText(txt,200,44); ctx.fillText(txt,200,44);
+  }
+
+  // Painel de status do Jorbe (valores atuais dos atributos)
+  drawStatsPanel();
 
   // ── Vida da fábrica (painel visível no rodapé esquerdo) ──
   const hn = factoryLives;
@@ -1696,6 +2145,22 @@ function drawHUD() {
     ctx.strokeText('♥', 34 + i*24, hy + 12);
     ctx.fillText('♥', 34 + i*24, hy + 12);
   }
+
+  // ── Botão "Chamar Torcida do Flamengo" (poder pago, custo crescente) ──
+  const tb = torcidaBtnRect();
+  const tcost = torcidaCost();
+  const canT = coins >= tcost;
+  ctx.fillStyle = canT ? 'rgba(160,20,20,0.9)' : 'rgba(60,30,30,0.85)';
+  rr(tb.x, tb.y, tb.w, tb.h, 6); ctx.fill();
+  ctx.strokeStyle = canT ? '#FFD24A' : '#7A5555'; ctx.lineWidth = 2;
+  rr(tb.x, tb.y, tb.w, tb.h, 6); ctx.stroke();
+  ctx.textAlign = 'left'; ctx.font = 'bold 13px Georgia';
+  ctx.fillStyle = canT ? '#FFFFFF' : '#B08888'; ctx.lineWidth = 2; ctx.strokeStyle = INK;
+  ctx.strokeText('📣 TORCIDA [F]', tb.x + 8, tb.y + 20);
+  ctx.fillText('📣 TORCIDA [F]', tb.x + 8, tb.y + 20);
+  ctx.textAlign = 'right'; ctx.fillStyle = canT ? '#FFD24A' : '#B08888';
+  ctx.strokeText('🪙'+tcost, tb.x + tb.w - 8, tb.y + 20);
+  ctx.fillText('🪙'+tcost, tb.x + tb.w - 8, tb.y + 20);
 
   // Wave
   ctx.font='bold 22px Georgia'; ctx.textAlign='center';
@@ -1819,11 +2284,11 @@ function drawShop() {
   // Título
   ctx.textAlign = 'center'; ctx.strokeStyle = INK; ctx.lineWidth = 4;
   ctx.font = 'bold 38px Georgia'; ctx.fillStyle = '#FFD700';
-  ctx.strokeText('MERCADO DO JORBE', W/2, 70);
-  ctx.fillText('MERCADO DO JORBE', W/2, 70);
+  ctx.strokeText('MERCADO', W/2, 70);
+  ctx.fillText('MERCADO', W/2, 70);
   ctx.font = 'bold 16px Georgia'; ctx.fillStyle = '#CFC0A0'; ctx.lineWidth = 3;
-  ctx.strokeText('Escolha 1 melhoria — clique ou tecle [1] [2] [3]   ·   [ESPAÇO] pular', W/2, 100);
-  ctx.fillText('Escolha 1 melhoria — clique ou tecle [1] [2] [3]   ·   [ESPAÇO] pular', W/2, 100);
+  ctx.strokeText('Escolha 1 melhoria — clique ou tecle [1] [2] [3] [4]   ·   [ESPAÇO] pular', W/2, 100);
+  ctx.fillText('Escolha 1 melhoria — clique ou tecle [1] [2] [3] [4]   ·   [ESPAÇO] pular', W/2, 100);
 
   // Moedas
   ctx.font = 'bold 26px Georgia'; ctx.fillStyle = '#FFCC33';
@@ -1905,16 +2370,18 @@ function wrapText(text, cx, y, maxW, lh) {
 
 function drawMenu() {
   drawOverlay('rgba(0,0,0,0.75)',[
-    {text:'JORBE GUARANÁ FACTORY GAME',y:110,size:44,color:'#FFD080'},
-    {text:'Devido ao grande sucesso do Jorbe Guaraná,',y:162,size:18,color:CREAM},
-    {text:'inimigos do mercado querem destruí-lo!',y:188,size:18,color:CREAM},
-    {text:'↑/W · ↓/S  —  Mudar andar      ESPAÇO  —  Atirar (segure)',y:232,size:16,color:CREAM},
-    {text:'🔴 Zona VERMELHA = crítico  |  🔵 Azul = escudo  |  Branco = dano normal',y:268,size:14,color:'#FFD080'},
-    {text:'O ponto fraco de cada garrafa muda constantemente!',y:296,size:13,color:'#FFD080'},
-    {text:'Garrafinhas pequenas rápidas · Médias normais · MEGA COLAS lentas mas resistentes',y:320,size:13,color:'#FF9999'},
-    {text:'Se uma garrafa chegar na fábrica você perde uma vida (♥ x5)',y:348,size:13,color:CREAM},
-    {text:'Sobreviva o máximo de ondas possível!',y:378,size:16,color:CREAM},
-    {text:'[ PRESSIONE ESPAÇO PARA COMEÇAR ]',y:H-40,size:24,color:'#FFD080',pulse:true},
+    {text:'JORBE GUARANÁ FACTORY GAME',y:96,size:42,color:'#FFD080'},
+    {text:'O Jorbe Guaraná virou febre nacional: o refri mais amado do Brasil.',y:142,size:16,color:CREAM},
+    {text:'Inveja, as gigantes das colas juntaram um exército de garrafas',y:166,size:16,color:CREAM},
+    {text:'para invadir a fábrica e apagar o Jorbe do mapa de uma vez por todas.',y:190,size:16,color:CREAM},
+    {text:'Suba pelos andares, mire o ponto fraco de cada garrafa e defenda a produção!',y:216,size:16,color:'#FFE0A0'},
+    {text:'↑/W · ↓/S  Mudar andar   ·   ESPAÇO  Atirar   ·   E  Super Poder',y:252,size:15,color:CREAM},
+    {text:'🔴 VERMELHA = crítico   |   🔵 Azul = escudo   |   Branco = dano normal',y:284,size:14,color:'#FFD080'},
+    {text:'O ponto fraco de cada garrafa muda constantemente!',y:310,size:13,color:'#FFD080'},
+    {text:'Mini Colas rápidas · Colas normais · MEGA COLAS lentas mas resistentes',y:334,size:13,color:'#FF9999'},
+    {text:'Entre as ondas, invista no MERCADO e na produção de guaraná para evoluir!',y:360,size:14,color:'#7BE36A'},
+    {text:'Se uma garrafa chegar na fábrica você perde uma vida — sobreviva o máximo de ondas!',y:386,size:14,color:CREAM},
+    {text:'[ PRESSIONE ESPAÇO PARA COMEÇAR ]',y:H-34,size:24,color:'#FFD080',pulse:true},
   ]);
 }
 
@@ -1942,6 +2409,7 @@ function loop(t) {
   if (state==='playing'||state==='lose'||state==='shop') {
     enemies.forEach(drawEnemy);
     drawDeadParticles();
+    drawFans();
     drawSprayFoam();
     drawHero();
     drawBullets();
@@ -1952,8 +2420,28 @@ function loop(t) {
   if (state==='menu') drawMenu();
   else if (state==='lose') drawLose();
   else if (state==='shop') drawShop();
+  drawMuteButtons();
 
   requestAnimationFrame(loop);
+}
+
+// ── Botões de mute (música / efeitos) ─────────────────────────────────────────
+function drawMuteButtons() {
+  [['music', musicBtnRect(), musicMuted, '🎵'], ['sfx', sfxBtnRect(), sfxMuted, '🔊']].forEach(([id, r, muted, icon]) => {
+    ctx.fillStyle = muted ? 'rgba(90,20,20,0.8)' : 'rgba(20,30,20,0.7)';
+    rr(r.x, r.y, r.w, r.h, 6); ctx.fill();
+    ctx.strokeStyle = muted ? '#C05050' : '#5A8A5A'; ctx.lineWidth = 2;
+    rr(r.x, r.y, r.w, r.h, 6); ctx.stroke();
+    ctx.font = '15px Georgia'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.globalAlpha = muted ? 0.55 : 1;
+    ctx.fillText(icon, r.x + r.w/2, r.y + r.h/2 + 1);
+    ctx.globalAlpha = 1;
+    if (muted) { // risco diagonal indicando mudo
+      ctx.strokeStyle = '#FF5555'; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(r.x + 5, r.y + 5); ctx.lineTo(r.x + r.w - 5, r.y + r.h - 5); ctx.stroke();
+    }
+    ctx.textBaseline = 'alphabetic';
+  });
 }
 
 // ── Áudio (Web Audio API) — tema garrafas/anos 30 ─────────────────────────────
@@ -2175,7 +2663,7 @@ function sfxGameOver() {
 let musicTimeout = null, musicOn = false;
 
 function startMusic() {
-  if (musicOn) return;
+  if (musicOn || musicMuted) return;
   musicOn = true;
   ac(); // ativa contexto
 
@@ -2246,6 +2734,22 @@ shoot = function() {
   _shoot();
   sfxPop();
 };
+
+// Silenciar TODOS os efeitos sonoros de uma vez (envolve cada função sfx)
+['sfxPop','sfxHit','sfxCrit','sfxShake','sfxSprayBurst','sfxShop','sfxBuy',
+ 'sfxBreak','sfxAlarm','sfxWave','sfxGameOver'].forEach(name => {
+  const orig = window[name];
+  if (typeof orig === 'function') window[name] = function (...a) { if (sfxMuted) return; return orig.apply(this, a); };
+});
+
+// Alterna música de fundo
+function toggleMusic() {
+  musicMuted = !musicMuted;
+  if (musicMuted) stopMusic();
+  else if (state === 'playing') startMusic();
+}
+// Alterna efeitos sonoros
+function toggleSfx() { sfxMuted = !sfxMuted; }
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
 updateGrain();
