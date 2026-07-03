@@ -60,7 +60,7 @@ let state = 'menu';
 let hero, enemies, bullets, dmgTexts, deadParticles;
 let score, wave, wavePhase, phaseTimer, spawnQueue, spawnElapsed;
 let factoryLives, factoryFlash;
-let coins = 0, shopOptions = [], shopHover = -1;
+let coins = 55, shopOptions = [], shopHover = -1;
 
 // Moedas por tipo de garrafa (escassas — economia difícil)
 const COIN_VALUE = { small: 1, medium: 2, big: 5 };
@@ -388,7 +388,7 @@ function initGame() {
     prodAccum: 0,         // acumulador de moedas da produção
   };
   sprayFoam = [];
-  coins = 0; shopOptions = []; shopHover = -1;
+  coins = 55; shopOptions = []; shopHover = -1;
   fans = []; torcidaUses = 0;
   enemies = []; bullets = []; dmgTexts = []; deadParticles = [];
   score = 0; wave = 0;
