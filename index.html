@@ -306,9 +306,9 @@ function buildWave(w) {
   } else {
     // Onda 5 em diante: dificuldade cresce
     const wEff = w - 4;
-    smallN = 6 + Math.floor(wEff * 1.5);
-    medN   = 1 + Math.floor(wEff * 1.0);
-    bigN   = Math.floor(wEff * 0.6);
+    smallN = 5 + Math.floor(wEff * 1.1);
+    medN   = 1 + Math.floor(wEff * 0.7);
+    bigN   = Math.floor(wEff * 0.4);
   }
   let t = 0;
   // Interleave small and medium, big at end
@@ -336,9 +336,9 @@ function spawnEnemy(type) {
   const et = ETYPES[type];
   const wEff = Math.max(0, wave - 4);
   // Escalonamento suave até a onda 4, mais agressivo depois
-  const hpScale    = wave <= 4 ? (1 + wave * 0.04)   : (1.16 + wEff * 0.14);
-  const speedScale = wave <= 4 ? (1 + wave * 0.01)   : (1.04 + wEff * 0.05);
-  const changeInt  = wave <= 4 ? 3600               : Math.max(1500, 3400 - wEff * 180);
+  const hpScale    = wave <= 4 ? (1 + wave * 0.04)   : (1.16 + wEff * 0.08);
+  const speedScale = wave <= 4 ? (1 + wave * 0.01)   : (1.04 + wEff * 0.03);
+  const changeInt  = wave <= 4 ? 3600               : Math.max(1800, 3400 - wEff * 120);
   const hp = Math.floor(et.hpBase * hpScale);
   const e = {
     type, x: W + 10,
