@@ -63,7 +63,7 @@ let factoryLives, factoryFlash;
 let coins = 55, shopOptions = [], shopHover = -1;
 
 // Moedas por tipo de garrafa (escassas — economia difícil)
-const COIN_VALUE = { small: 4, medium: 10, big: 25 };
+const COIN_VALUE = { small: 3, medium: 7, big: 18 };
 
 // Raridade: peso no sorteio + multiplicador de preço + cor
 const RARITY = {
@@ -84,22 +84,22 @@ const UPGRADES = [
   { id:'dmg',     icon:'💥', name:'Tampinha Turbo',    rarity:'common', baseCost:16,
     desc:h=>`+4 dano de tiro (${8+h.up.bulletDmg}→${12+h.up.bulletDmg})`,
     apply:h=>{ h.up.bulletDmg += 4; } },
-  { id:'rate',    icon:'⚡', name:'Gatilho Rápido',    rarity:'common', baseCost:16,
-    desc:h=>`+10% cadência de tiro`,
-    apply:h=>{ h.up.fireRateMul *= 1.10; } },
-  { id:'coin',    icon:'🪙', name:'Faro pra Grana',    rarity:'rare',   baseCost:22,
-    desc:h=>`+18% moedas por garrafa`,
-    apply:h=>{ h.up.coinMul *= 1.18; } },
-  { id:'charge',  icon:'🔋', name:'Gás Turbinado',     rarity:'rare',   baseCost:24,
+  { id:'rate',    icon:'⚡', name:'Gatilho Rápido',    rarity:'common', baseCost:20,
+    desc:h=>`+7% cadência de tiro`,
+    apply:h=>{ h.up.fireRateMul = Math.min(h.up.fireRateMul * 1.07, 2.4); } },
+  { id:'coin',    icon:'🪙', name:'Faro pra Grana',    rarity:'rare',   baseCost:30,
+    desc:h=>`+15% moedas por garrafa`,
+    apply:h=>{ h.up.coinMul *= 1.15; } },
+  { id:'charge',  icon:'🔋', name:'Gás Turbinado',     rarity:'rare',   baseCost:32,
     desc:h=>`+15% carga do especial`,
     apply:h=>{ h.up.chargeMul *= 1.15; } },
-  { id:'special', icon:'🌊', name:'Gás Concentrado',   rarity:'rare',   baseCost:26,
+  { id:'special', icon:'🌊', name:'Gás Concentrado',   rarity:'rare',   baseCost:34,
     desc:h=>`+7 dano do especial (${18+h.up.specialDmg}→${25+h.up.specialDmg})`,
     apply:h=>{ h.up.specialDmg += 7; } },
-  { id:'life',    icon:'❤️', name:'Reforço da Fábrica', rarity:'epic',   baseCost:48,
+  { id:'life',    icon:'❤️', name:'Reforço da Fábrica', rarity:'epic',   baseCost:60,
     desc:h=>`+1 vida da fábrica (máx 8)`,
     apply:h=>{ factoryLives = Math.min(8, factoryLives + 1); } },
-  { id:'pierce',  icon:'🎯', name:'Tampinha Perfurante', rarity:'epic', baseCost:44,
+  { id:'pierce',  icon:'🎯', name:'Tampinha Perfurante', rarity:'epic', baseCost:55,
     desc:h=>`tiros atravessam +1 garrafa`,
     apply:h=>{ h.up.pierce += 1; } },
 ];
@@ -114,10 +114,10 @@ const PRODUCTION_UP = {
   },
   apply:h=>{ h.up.production += 1; }
 };
-// Custo progressivo agressivo: ~1.8x a cada nível já comprado (produção sobe mais rápido: 2.1x)
+// Custo progressivo: 2.0x a cada nível (produção: 2.2x)
 function upgradeCost(u) {
   const lv = (hero.up.levels[u.id] || 0);
-  const mul = u.id === 'production' ? 2.1 : 1.8;
+  const mul = u.id === 'production' ? 2.2 : 2.0;
   return Math.round(u.baseCost * RARITY[u.rarity].costMul * Math.pow(mul, lv));
 }
 
@@ -752,7 +752,7 @@ function update(dt) {
     // Wave cleared? → abre a loja roguelike
     if (wavePhase === 'fighting' && enemies.length === 0) {
       score += wave * 120;  // wave-clear bonus
-      coins += 8 + wave * 3; // bônus por limpar a onda (cresce com a onda)
+      coins += 5 + wave * 2; // bônus por limpar a onda (cresce com a onda)
       wavePhase  = 'between';
       phaseTimer = 4500;
       openShop();
@@ -892,7 +892,7 @@ function killReward(e) {
     sfxBuy();
   }
   // Drop de item: small=8%, medium=18%, big=40% — aplica direto no herói
-  const dropChance = e.type === 'small' ? 0.08 : e.type === 'medium' ? 0.18 : 0.40;
+  const dropChance = e.type === 'small' ? 0.03 : e.type === 'medium' ? 0.08 : 0.22;
   if (Math.random() < dropChance) {
     const pool = UPGRADES.filter(u => u.rarity !== 'epic' || e.type === 'big');
     const picked = pool[Math.floor(Math.random() * pool.length)];
